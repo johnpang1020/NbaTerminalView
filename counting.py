@@ -1,8 +1,9 @@
-from nba_api.live.nba.endpoints import scoreboard
+from nba_api.live.nba.endpoints import scoreboard, PlayByPlay
 from datetime import datetime
 import time
 import sys
 import os
+import re
 
 # Fix Windows console encoding for emojis
 if sys.platform == "win32":
@@ -17,6 +18,78 @@ if sys.platform == "win32":
 def get_team_display_name(team_data):
     """Get a nice display name for a team"""
     return f"{team_data['teamCity']} {team_data['teamName']}"
+
+
+def format_clock_time(clock_str):
+    """Convert PT04M03.00S format to M:SS format"""
+    if not clock_str or clock_str == "N/A":
+        return ""
+
+    # Parse PT04M03.00S format
+    match = re.search(r"PT(\d+)M(\d+(?:\.\d+)?)S", clock_str)
+    if match:
+        minutes = int(match.group(1))
+        seconds = float(match.group(2))
+        return f"{minutes}:{int(seconds):02d}"
+
+    return clock_str
+
+
+def get_recent_plays(game_id, num_plays=20):
+    """Fetch recent plays for a game"""
+    try:
+        pbp = PlayByPlay(game_id=game_id)
+        pbp_data = pbp.get_dict()
+
+        if "game" in pbp_data and "actions" in pbp_data["game"]:
+            actions = pbp_data["game"]["actions"]
+            # Return the most recent plays (last N plays)
+            return actions[-num_plays:] if len(actions) > num_plays else actions
+    except Exception as e:
+        return None
+
+    return None
+
+
+def display_recent_plays_espn_style(game, num_plays=20):
+    """Display recent plays in ESPN-style format"""
+    game_id = game.get("gameId")
+    if not game_id:
+        return
+
+    home_team = game["homeTeam"]
+    away_team = game["awayTeam"]
+    home_tricode = home_team.get("teamTricode", "")
+    away_tricode = away_team.get("teamTricode", "")
+
+    plays = get_recent_plays(game_id, num_plays)
+    if not plays:
+        return
+
+    print("\n" + "=" * 100)
+    print("RECENT PLAYS")
+    print("=" * 100)
+    print(f"{'TIME':<8} {'PLAY':<70} {away_tricode:>6} {home_tricode:>6}")
+    print("-" * 100)
+
+    for play in reversed(plays):  # Show most recent first (reverse order)
+        clock = format_clock_time(play.get("clock", ""))
+        description = play.get("description", "")
+        score_away = play.get("scoreAway", "")
+        score_home = play.get("scoreHome", "")
+
+        # Format scores (show empty if not available)
+        away_score_str = str(score_away) if score_away != "" else ""
+        home_score_str = str(score_home) if score_home != "" else ""
+
+        # Truncate description if too long
+        if len(description) > 68:
+            description = description[:65] + "..."
+
+        print(f"{clock:<8} {description:<70} {away_score_str:>6} {home_score_str:>6}")
+
+    print("=" * 100)
+    print()
 
 
 def display_game_state(game):
@@ -178,7 +251,7 @@ def display_all_games(games_data):
     return True
 
 
-def main():
+def main(show_p2p=False):
     """Main function to fetch and display live game data"""
     print("Live Game Tracker")
     print("Fetching live game data...\n")
@@ -232,6 +305,11 @@ def main():
             for team_name, game in tracked_games.values():
                 print(f"{team_name} Game Found!\n")
                 display_game_state(game)
+
+                # Show recent plays for Warriors games (always or when --p2p flag is set)
+                if "Warriors" in team_name and show_p2p:
+                    display_recent_plays_espn_style(game)
+
                 print()  # Add spacing between games
 
         else:
@@ -248,14 +326,17 @@ def main():
         sys.exit(1)
 
 
-def watch_game_live(refresh_interval=30):
+def watch_game_live(refresh_interval=30, show_p2p=False):
     """
     Continuously update the game state (Warriors, Spurs, Rockets, Thunder focus)
 
     Args:
         refresh_interval: Seconds between updates (default: 30)
+        show_p2p: Whether to show play-by-play data (default: False)
     """
     print(" Live Game Tracker (Live Mode - Warriors, Spurs, Rockets & Thunder Focus)")
+    if show_p2p:
+        print(" Play-by-Play mode enabled")
     print(f"Refreshing every {refresh_interval} seconds...")
     print("Press Ctrl+C to stop\n")
 
@@ -321,6 +402,11 @@ def watch_game_live(refresh_interval=30):
                 for team_name, game in tracked_games.values():
                     print(f"{team_name} Game Found!\n")
                     display_game_state(game)
+
+                    # Show recent plays for Warriors games when --p2p flag is set
+                    if "Warriors" in team_name and show_p2p:
+                        display_recent_plays_espn_style(game)
+
                     print()  # Add spacing between games
             else:
                 print(
@@ -377,6 +463,7 @@ def watch_all_games_live(refresh_interval=30):
 if __name__ == "__main__":
     # Check command line arguments
     show_all_games = "--all" in sys.argv
+    show_p2p = "--p2p" in sys.argv
 
     # Check if user wants live mode
     if "--live" in sys.argv:
@@ -386,7 +473,7 @@ if __name__ == "__main__":
             if arg == "--live" and i + 1 < len(sys.argv):
                 try:
                     next_arg = sys.argv[i + 1]
-                    if next_arg != "--all":
+                    if next_arg not in ["--all", "--p2p"]:
                         refresh_interval = int(next_arg)
                 except ValueError:
                     print("Invalid refresh interval. Using default (30 seconds)")
@@ -395,7 +482,7 @@ if __name__ == "__main__":
         if show_all_games:
             watch_all_games_live(refresh_interval)
         else:
-            watch_game_live(refresh_interval)
+            watch_game_live(refresh_interval, show_p2p=show_p2p)
     elif show_all_games:
         # Show all games once
         print("Live Game Tracker - All Games")
@@ -408,10 +495,13 @@ if __name__ == "__main__":
             print(f"❌ Error fetching game data: {e}")
             sys.exit(1)
     else:
-        main()
+        main(show_p2p=show_p2p)
         print("\n💡 Tip: Run with '--live' flag for continuous updates:")
-        print("   python live_nba_game.py --live")
-        print("   python live_nba_game.py --live 15  (refresh every 15 seconds)")
+        print("   python counting.py --live")
+        print("   python counting.py --live 15  (refresh every 15 seconds)")
         print("\n💡 To see all games instead of just Warriors:")
-        print("   python live_nba_game.py --all")
-        print("   python live_nba_game.py --all --live")
+        print("   python counting.py --all")
+        print("   python counting.py --all --live")
+        print("\n💡 To show play-by-play for Warriors games:")
+        print("   python counting.py --p2p")
+        print("   python counting.py --p2p --live")
