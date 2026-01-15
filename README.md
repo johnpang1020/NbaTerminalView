@@ -7,6 +7,7 @@
 | `python counting.py --live`       | Live tracking (Warriors)                 |
 | `python counting.py --all --live` | Live tracking (All games)                |
 | `python counting.py --live 15`    | Custom refresh (15 sec)                  |
+| `python counting.py --p2p`        | Warriors detail                          |
 
 ## Requirements
 
